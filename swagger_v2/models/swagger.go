@@ -1,11 +1,24 @@
 package models
 
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"github.com/sirupsen/logrus"
+	"regexp"
+)
+
 const (
 	SwaggerVersion2        = "2.0"
 	HostPattern            = "^[^{}/ :\\\\]+(?::\\d+)?$"
 	BasePathPattern        = "^/"
 	HeaderTypePattern      = "[string|number|integer|boolean|array]"
 	VendorExtensionPattern = "^x-"
+)
+
+// Regex
+const (
+	refNameRegex = `.*\/(.*)$`
 )
 
 type Swagger struct {
@@ -66,6 +79,42 @@ type Operation struct {
 	Security     *[]SecurityRequirement `json:"security,omitempty" yaml:"security,omitempty"`
 }
 
+func (op *Operation) GetQueryParameters() []Parameter {
+	return op.getParametersByLocation("query")
+}
+
+func (op *Operation) GetPathParameters() []Parameter {
+	return op.getParametersByLocation("path")
+}
+
+func (op *Operation) GetBodyParameters() []Parameter {
+	return op.getParametersByLocation("body")
+}
+
+func (op *Operation) GetCookieParameters() []Parameter {
+	return op.getParametersByLocation("cookie")
+}
+
+func (op *Operation) GetHeaderParameters() []Parameter {
+	return op.getParametersByLocation("header")
+}
+
+func (op *Operation) GetFormDataParameters() []Parameter {
+	return op.getParametersByLocation("formData")
+}
+
+func (op *Operation) getParametersByLocation(location string) []Parameter {
+	query := make([]Parameter, 0)
+	if op.Parameters != nil {
+		for _, p := range *op.Parameters {
+			if p.In != nil && *p.In == location {
+				query = append(query, p)
+			}
+		}
+	}
+	return query
+}
+
 type PathItem struct {
 	Ref        *string      `json:"$ref,omitempty" yaml:"$ref,omitempty"`
 	Get        *Operation   `json:"get,omitempty" yaml:"get,omitempty"`
@@ -78,6 +127,33 @@ type PathItem struct {
 	Parameters *[]Parameter `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 }
 
+func (pi *PathItem) ToShortString() string {
+	if pi != nil {
+		buffer := bytes.NewBufferString("PathItem:[")
+		if pi.Parameters != nil {
+			buffer.WriteString("Global:")
+			buffer.WriteString(ToShortString(pi.Parameters))
+		}
+		buffer.WriteString(ToShortStringPrefixed("Get:", GetOperationParameters(pi.Get)))
+		buffer.WriteString(ToShortStringPrefixed("Put:", GetOperationParameters(pi.Put)))
+		buffer.WriteString(ToShortStringPrefixed("Post:", GetOperationParameters(pi.Post)))
+		buffer.WriteString(ToShortStringPrefixed("Delete:", GetOperationParameters(pi.Delete)))
+		buffer.WriteString(ToShortStringPrefixed("Patch:", GetOperationParameters(pi.Patch)))
+		buffer.WriteString(ToShortStringPrefixed("Head:", GetOperationParameters(pi.Head)))
+		buffer.WriteString(ToShortStringPrefixed("Options:", GetOperationParameters(pi.Options)))
+		buffer.WriteString("]")
+		return buffer.String()
+	}
+	return ""
+}
+
+func GetOperationParameters(op *Operation) *[]Parameter {
+	if op != nil {
+		return op.Parameters
+	}
+	return nil
+}
+
 type Response struct {
 	Description *string                 `json:"description,omitempty" yaml:"description,omitempty"`
 	Ref         *string                 `json:"$ref,omitempty" yaml:"$ref,omitempty"`
@@ -87,7 +163,7 @@ type Response struct {
 }
 
 type Header struct {
-	Type
+	TypeStruct
 	Restrictions
 	Items            *PrimitivesItems `json:"items,omitempty" yaml:"items,omitempty"`
 	CollectionFormat *string          `json:"collectionFormat,omitempty" yaml:"collectionFormat,omitempty"`
@@ -95,7 +171,7 @@ type Header struct {
 }
 
 type Parameter struct {
-	Type
+	TypeStruct
 	Restrictions
 	Ref              *string          `json:"$ref,omitempty" yaml:"$ref,omitempty"`
 	Name             *string          `json:"name,omitempty" yaml:"name,omitempty"`
@@ -106,6 +182,121 @@ type Parameter struct {
 	Items            *PrimitivesItems `json:"items,omitempty" yaml:"items,omitempty"`
 	CollectionFormat *string          `json:"collectionFormat,omitempty" yaml:"collectionFormat,omitempty"`
 	AllowEmptyValue  *bool            `json:"allowEmptyValue,omitempty" yaml:"allowEmptyValue,omitempty"`
+}
+
+func (p *Parameter) GetLocationAndName() string {
+	buffer := bytes.NewBufferString("")
+	if p.In != nil {
+		buffer.WriteString(*p.In)
+	}
+	buffer.WriteString(":")
+	if p.Name != nil {
+		buffer.WriteString(*p.Name)
+	}
+	return buffer.String()
+}
+
+func (p *Parameter) ToShortString() string {
+	buffer := bytes.NewBufferString("[")
+	buffer.WriteString(p.GetLocationAndName())
+	buffer.WriteString("(")
+	if p.Ref != nil {
+		buffer.WriteString(p.GetRefNamePrefixed())
+	} else if p.Schema != nil {
+		s := *p.Schema
+		if s.Ref != nil && len(*s.Ref) > 0 {
+			buffer.WriteString(s.GetRefNamePrefixed())
+		} else {
+			buffer.WriteString(s.GetSchemaTypeAndFormat())
+		}
+	} else {
+		buffer.WriteString(p.GetTypeAndFormat())
+	}
+	buffer.WriteString(")]")
+	return buffer.String()
+}
+
+func (p *Parameter) GetRefName() string {
+	if p.Ref != nil {
+		matcher := regexp.MustCompile(refNameRegex)
+		return string(matcher.ReplaceAll([]byte(*p.Ref), []byte(`$1`)))
+	}
+	return ""
+}
+
+func (p *Parameter) GetRefNamePrefixed() string {
+	if p.Ref != nil {
+		ref := p.GetRefName()
+		return fmt.Sprintf("ref:%s", ref)
+	}
+	return ""
+}
+
+func (s *Schema) GetRefName() string {
+	if s.Ref != nil {
+		matcher := regexp.MustCompile(refNameRegex)
+		return string(matcher.ReplaceAll([]byte(*s.Ref), []byte(`$1`)))
+	}
+	return ""
+}
+
+func (s *Schema) GetRefNamePrefixed() string {
+	if s.Ref != nil {
+		ref := s.GetRefName()
+		return fmt.Sprintf("ref:%s", ref)
+	}
+	return ""
+}
+
+func (s *Schema) GetSchemaTypeAndFormat() string {
+	buffer := bytes.NewBufferString("")
+	if s.Ref != nil && len(*s.Ref) > 0 {
+		buffer.WriteString(s.GetRefNamePrefixed())
+	} else {
+		if s.Type != nil {
+			buffer.WriteString(*s.Type)
+		}
+		buffer.WriteString(":")
+		if s.Type != nil && *s.Type == "array" {
+			items := s.GetItems()
+			if items != nil && len(items) > 0 {
+				buffer.WriteString("[")
+				for _, item := range items {
+					buffer.WriteString("(")
+					buffer.WriteString(item.GetSchemaTypeAndFormat())
+					buffer.WriteString(")")
+				}
+				buffer.WriteString("]")
+			}
+		} else if s.Format != nil {
+			buffer.WriteString(*s.Format)
+		}
+	}
+	return buffer.String()
+}
+
+func ToShortString(arr *[]Parameter) string {
+	if arr != nil {
+		buffer := bytes.NewBufferString("Parameters:[")
+		for i, p := range *arr {
+			buffer.WriteString(p.ToShortString())
+			if i < len(*arr)-1 {
+				buffer.WriteString(",")
+			}
+		}
+		buffer.WriteString("]")
+		return buffer.String()
+	}
+	return ""
+}
+
+func ToShortStringPrefixed(prefix string, arr *[]Parameter) string {
+	if arr != nil && len(*arr) > 0 {
+		buffer := bytes.NewBufferString(prefix)
+		buffer.WriteString(ToShortString(arr))
+		return buffer.String()
+	}
+	return ""
 }
 
 type Schema struct {
@@ -122,8 +313,48 @@ type Schema struct {
 	Xml                  *Xml               `json:"xml,omitempty" yaml:"xml,omitempty"`
 }
 
+func (s *Schema) GetItems() (arr []Schema) {
+	if s.Items != nil {
+		data, err := ToString(s.Items)
+		if err != nil {
+			logrus.Error(err)
+		} else {
+			switch s.Items.(type) {
+			case map[string]interface{}:
+				sObj := Schema{}
+				err = json.Unmarshal([]byte(data), &sObj)
+				if err != nil {
+					logrus.Error(err)
+				} else {
+					return append(arr, sObj)
+				}
+			case []map[string]interface{}:
+				var sObj []Schema
+				err = json.Unmarshal([]byte(data), &sObj)
+				if err != nil {
+					logrus.Error(err)
+				} else {
+					return append(arr, sObj...)
+				}
+			default:
+				return nil
+			}
+
+		}
+	}
+	return nil
+}
+
+func ToString[T any](i T) (string, error) {
+	data, err := json.Marshal(i)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 type FileSchema struct {
-	Type
+	TypeStruct
 	Title        *string       `json:"title,omitempty" yaml:"title,omitempty"`
 	Description  *string       `json:"description,omitempty" yaml:"description,omitempty"`
 	Required     *[]string     `json:"required,omitempty" yaml:"required,omitempty"`
@@ -133,7 +364,7 @@ type FileSchema struct {
 }
 
 type PrimitivesItems struct {
-	Type
+	TypeStruct
 	Restrictions
 	Items            *PrimitivesItems `json:"items,omitempty" yaml:"items,omitempty"`
 	CollectionFormat *string          `json:"collectionFormat,omitempty" yaml:"collectionFormat,omitempty"`
@@ -156,7 +387,7 @@ type Tag struct {
 }
 
 type Security struct {
-	Type
+	TypeStruct
 	Name             *string            `json:"name,omitempty" yaml:"name,omitempty"`
 	In               *string            `json:"in,omitempty" yaml:"in,omitempty"`
 	Flow             *string            `json:"flow,omitempty" yaml:"flow,omitempty"`
@@ -166,10 +397,22 @@ type Security struct {
 	TokenUrl         *string            `json:"tokenUrl,omitempty" yaml:"tokenUrl,omitempty"`
 }
 
-type Type struct {
+type TypeStruct struct {
 	Type    *string     `json:"type,omitempty" yaml:"type,omitempty"`
 	Format  *string     `json:"format,omitempty" yaml:"format,omitempty"`
 	Default interface{} `json:"default,omitempty" yaml:"default,omitempty"`
+}
+
+func (t *TypeStruct) GetTypeAndFormat() string {
+	buffer := bytes.NewBufferString("")
+	if t.Type != nil {
+		buffer.WriteString(*t.Type)
+	}
+	buffer.WriteString(":")
+	if t.Format != nil {
+		buffer.WriteString(*t.Format)
+	}
+	return buffer.String()
 }
 
 type Restrictions struct {

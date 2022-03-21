@@ -33,4 +33,14 @@ func main() {
 
 	//fmt.Println(common.ToString(swagg))
 	fmt.Println(common.ToString(swagg.Info))
+
+	p1 := common.ToGinPath("/test/{prop1}/ddd-as/{prop2}/231_asd/{prop3}")
+	fmt.Println(p1)
+	p2 := common.ToSwaggerPath(p1)
+	fmt.Println(p2)
+
+	for k, v := range *swagg.Paths {
+		fmt.Println(k, v2m.ToShortString(v.Parameters))
+		fmt.Println(v.ToShortString())
+	}
 }

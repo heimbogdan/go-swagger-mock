@@ -76,7 +76,7 @@ func MethodTypeFromString(m string) MethodType {
 
 func CreateController(path string, item models.PathItem) BaseController {
 	return BaseController{
-		Path:    path,
+		Path:    ToGinPath(path),
 		Methods: CreateMethods(item),
 	}
 }
@@ -97,6 +97,7 @@ func CreateMethods(item models.PathItem) []Method {
 
 func CreateHandler(op *models.Operation, gParams *[]models.Parameter) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
+
 		//TODO implement
 	}
 }
